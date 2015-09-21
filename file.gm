@@ -1,0 +1,186 @@
+package org.gummymodules.generated.file;
+
+
+eventtype BeginEvent {
+}
+
+eventtype EndEvent {
+}
+
+eventtype FileEvents {
+	string fileID;
+	string userrole;
+}
+
+eventtype OpenEvent extends FileEvents {
+	string mode;
+}
+
+eventtype ReadEvent extends FileEvents {
+	string content;
+}
+
+eventtype WriteEvent extends FileEvents {
+	string content;
+}
+
+eventtype CloseEvent extends FileEvents {
+}
+
+eventtype TimeoutEvent {
+	string fileID;
+	string userID;
+	int opentime;
+}
+
+eventtype OutofOrderEvent {
+	string fileID;
+	string userID;
+}
+
+gummymodule FilterUsers(string userID, string fileID) {
+	shared int counter;
+	
+	{Construct} appearance (input in [BeginEvent]) {
+		initializer {
+			boolean foo = true;
+			int bar = 2;
+		}
+		// System.out.println("+ appearance");
+		construct;
+	}
+	
+	{Destruct} disappearance (input in [EndEvent]) {
+		// System.out.println("+ disappearance");
+		destruct;
+	}
+	
+	{FileEvents} filter (
+		input in [FileEvents]
+		&& input.get("publisher").equals(userID)
+		&& input.get("userrole").equals("premium")
+		&& input.get("fileID").equals(fileID)
+	) {
+		publish input;
+	}
+}
+
+gummymodule CheckOrder() {
+	boolean opened = false;
+	
+	EventType create(EventType source) {
+		// System.out.println("+ out of order");
+		OutofOrderEvent output = new OutofOrderEvent();
+		output.set("fileID", source.get("fileID"));
+		output.set("userID", source.get("publisher"));
+		return output;
+	}
+	
+	{OutofOrderEvent} check (input in [FileEvents]) {
+		if (input in [OpenEvent]) {
+			if (! opened) {
+				opened = true;
+			}
+			else {
+				publish create(input);
+			}
+		}
+		else if (input in [ReadEvent,WriteEvent]) {
+			if (! opened) {
+				publish create(input);
+			}
+		}
+		else if (input in [CloseEvent]) {
+			if (! opened) {
+				publish create(input);
+			}
+			else {
+				opened = false;
+			}
+		}
+	}
+}
+
+gummymodule CheckTimeout() {
+	boolean opened = false;
+	long last;
+	long timer;
+	int ttl = 2000;
+	
+	long getCurrent() {
+		return System.currentTimeMillis();
+	}
+	
+	long init() {
+		last = getCurrent();
+		return 0;
+	}
+	
+	long update() {
+		return (getCurrent() - last);
+	}
+	
+	long reset() {
+		last = getCurrent();
+		return 0;
+	}
+	
+	{TimeoutEvent} open (input in [OpenEvent]) {
+		if (! opened) {
+			opened = true;
+			timer = init();
+			// System.out.println("+ awaiting timeout ...");
+			while (opened && (timer < ttl)) timer = update();
+			if (timer >= ttl) {
+				// System.out.println("+ ... timout occured");
+				TimeoutEvent output = new TimeoutEvent();
+				output.set("fileID", input.get("fileID"));
+				output.set("userID", input.get("publisher"));
+				output.set("opentime", timer);
+				publish output;
+			}
+			else {
+				// System.out.println("+ ... no timeout occured");
+			}
+		}
+		else {
+			// System.out.println("+ already open");
+		}
+	}
+	
+	{} readwrite (input in [ReadEvent,WriteEvent]) {
+		timer = reset();
+		// System.out.println("+ ... reset ...");
+	}
+	
+	{} close (input in [CloseEvent]) {
+		timer = reset();
+		// System.out.println("+ ... reset ...");
+		opened = false;
+	}
+}
+
+gummymodule FilterEvents() {
+	shared int counter;
+	
+	{TimeoutEvent} filter (input in [TimeoutEvent]) {
+		counter = counter + 1;
+		// System.out.println("+ " + counter + ". timeout");
+		if (counter > 3) {
+			publish input;
+		}
+	}
+}
+
+gummymodule PremiumUsersEPAs(string userID, string fileID) {
+	int counter = 0;
+	
+	selector FilterUsers(userID, fileID);
+	
+	reactor CheckOrder;
+	reactor CheckTimeout;
+	
+	publisher OutofOrderEvent;
+	publisher FilterEvents;
+}
+
